@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Traffic Sign Recognition</title>
+</head>
+<body>
+    <h1>Object Detection Video Feed</h1>
+    <img src="{{ url_for('video_feed', filename=filename) }}" width="640" height="480">
+    <form action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data">
+        <input type="file" name="file" accept="video/*">
+        <input type="submit" value="Upload Video">
+    </form>
+</body>
+</html>
