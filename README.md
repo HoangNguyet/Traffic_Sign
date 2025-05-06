@@ -5,3 +5,5 @@ Nhận diện biển báo qua video: Chưa hoàn thiện: demoHSV.py
 
 
 Phân loại biển báo: classification.py
+
+Train model: main.py
