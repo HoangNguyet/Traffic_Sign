@@ -1,50 +1,59 @@
 import cv2 as cv
 import numpy as np
+# Tắt bớt log TensorFlow/Keras
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-from tensorflow import keras
+from tensorflow import keras # Nên import keras từ tensorflow
 from keras.models import load_model # type: ignore
 import math
-import traceback
+import traceback # Để in lỗi chi tiết
 
-# --- Constants ---
+# --- Constants (Lấy từ code ảnh, CẦN TINH CHỈNH KỸ LƯỠNG CHO VIDEO) ---
 # Lọc cơ bản
-MIN_SIGN_AREA = 200      # Tăng nhẹ lại
-MAX_SIGN_AREA = 80000    # Giữ nguyên
-# Bộ lọc sớm (Giữ nguyên)
-EARLY_ASPECT_RATIO_MIN = 0.15
-EARLY_ASPECT_RATIO_MAX = 6.0
-# Ngưỡng nhận dạng hình dạng (Thắt chặt lại)
-APPROX_EPSILON_FACTOR = 0.03
-CIRCULARITY_THRESHOLD_FOR_CIRCLE = 0.72 # Tăng nhẹ lại
-SOLIDITY_MIN_THRESHOLD = 0.68 # <<< TĂNG NGƯỠNG ĐỘ ĐẶC
-# Ngưỡng tỷ lệ W/H (Thắt chặt lại đáng kể)
-RECTANGLE_ASPECT_RATIO_MIN = 0.5 # <<< THẮT CHẶT
-RECTANGLE_ASPECT_RATIO_MAX = 2.5 # <<< THẮT CHẶT
-TRIANGLE_ASPECT_RATIO_MIN = 0.7 # <<< THẮT CHẶT
-TRIANGLE_ASPECT_RATIO_MAX = 1.3 # <<< THẮT CHẶT
-CIRCLE_OCTAGON_ASPECT_RATIO_MIN = 0.80 # <<< THẮT CHẶT
-CIRCLE_OCTAGON_ASPECT_RATIO_MAX = 1.20 # <<< THẮT CHẶT
-# Ngưỡng Adaptive Threshold (Làm kém nhạy hơn)
-ADAPTIVE_BLOCK_SIZE = 19
-ADAPTIVE_C = 9          # <<< TĂNG MẠNH C
-# Ngưỡng phân loại (QUAN TRỌNG - Tăng rất cao)
-CONFIDENCE_THRESHOLD = 0.95 # <<< TĂNG RẤT CAO (Thử 0.9, 0.95, 0.98)
-# Khác
-RESIZE_DIM = (32, 32)
-DUPLICATE_DISTANCE_FACTOR = 0.3
-# <<< THÊM HẰNG SỐ LỌC VỊ TRÍ >>>
-MAX_VERTICAL_POSITION_RATIO = 0.65 # Chỉ xử lý contour nằm trên 65% chiều cao ảnh
+MIN_SIGN_AREA = 150      # Ngưỡng diện tích tối thiểu (pixel) - video có thể cần giá trị nhỏ hơn ảnh tĩnh
+MAX_SIGN_AREA = 80000    # Ngưỡng diện tích tối đa
+# Bộ lọc sớm - loại bỏ hình dạng quá bất thường ngay từ đầu
+EARLY_ASPECT_RATIO_MIN = 0.15 # Tỷ lệ W/H tối thiểu
+EARLY_ASPECT_RATIO_MAX = 6.0  # Tỷ lệ W/H tối đa
 
-# --- Load Model and Labels (Giữ nguyên) ---
-MODEL_PATH = "model_26.h5"
+# Ngưỡng nhận dạng hình dạng
+APPROX_EPSILON_FACTOR = 0.03 # Hệ số cho approxPolyDP
+CIRCULARITY_THRESHOLD_FOR_CIRCLE = 0.68 # Ngưỡng tròn tối thiểu
+SOLIDITY_MIN_THRESHOLD = 0.50 # Ngưỡng độ đặc tối thiểu (có thể cần nới lỏng hơn cho video)
+# Ngưỡng tỷ lệ W/H theo hình dạng
+RECTANGLE_ASPECT_RATIO_MIN = 0.25
+RECTANGLE_ASPECT_RATIO_MAX = 4.0
+TRIANGLE_ASPECT_RATIO_MIN = 0.5
+TRIANGLE_ASPECT_RATIO_MAX = 1.7
+CIRCLE_OCTAGON_ASPECT_RATIO_MIN = 0.70
+CIRCLE_OCTAGON_ASPECT_RATIO_MAX = 1.35
+
+# Ngưỡng Adaptive Threshold (Tinh chỉnh Cẩn Thận!)
+ADAPTIVE_BLOCK_SIZE = 19 # Kích thước vùng lân cận (phải lẻ)
+ADAPTIVE_C = 6          # Hằng số trừ đi (Thử 4-7)
+
+# Ngưỡng phân loại (CỰC KỲ QUAN TRỌNG CHO VIDEO)
+CONFIDENCE_THRESHOLD = 0.75 # <<< Tinh chỉnh giá trị này (0.65 - 0.9)
+
+# Khác
+RESIZE_DIM = (32, 32)   # Kích thước ảnh đầu vào mô hình
+DUPLICATE_DISTANCE_FACTOR = 0.3 # Hệ số khoảng cách để xử lý trùng lặp
+
+# --- Load Model ---
+# !!! SỬ DỤNG MODEL CỦA VIDEO SCRIPT !!!
+MODEL_PATH = "model_24.h5"
 try:
     model = load_model(MODEL_PATH)
     print(f"Model '{MODEL_PATH}' loaded successfully.")
+    # Không cần compile lại khi chỉ dự đoán
+    # model.compile(optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"])
 except Exception as e:
     print(f"FATAL ERROR loading model: {e}")
+    print(f"Ensure '{MODEL_PATH}' exists and is a valid Keras model file.")
     exit()
-labelToText = { # Đảm bảo khớp model
+
+# --- Label Mapping (Đảm bảo khớp với model_26.h5) ---
+labelToText = {
     0: 'Speed limit (20km/h)', 1: 'Speed limit (30km/h)', 2: 'Speed limit (50km/h)',
     3: 'Speed limit (60km/h)', 4: 'Speed limit (70km/h)', 5: 'Speed limit (80km/h)',
     6: 'End of speed limit (80km/h)', 7: 'Speed limit (100km/h)', 8: 'Speed limit (120km/h)',
@@ -62,21 +71,23 @@ labelToText = { # Đảm bảo khớp model
 }
 print(f"Loaded {len(labelToText)} sign labels.")
 
-# --- HSV Thresholds (Có thể cần làm chặt lại S/V min nếu nhiễu quá) ---
-low_thresh_red1, high_thresh_red1 = (165, 50, 50), (179, 255, 255) # Tăng nhẹ S/V min
-low_thresh_red2, high_thresh_red2 = (0, 50, 50), (10, 255, 255)     # Tăng nhẹ S/V min
-low_thresh_blue, high_thresh_blue = (90, 50, 50), (135, 255, 255)   # Tăng nhẹ S/V min
-low_thresh_yellow, high_thresh_yellow = (15, 50, 70), (40, 255, 255) # Tăng nhẹ S/V min
-print("HSV thresholds set. Adjust if needed.")
+# --- HSV Thresholds (Lấy từ code ảnh, tinh chỉnh nếu cần) ---
+# Đỏ
+low_thresh_red1, high_thresh_red1 = (165, 40, 40), (179, 255, 255)
+low_thresh_red2, high_thresh_red2 = (0, 40, 40), (10, 255, 255)
+# Xanh dương
+low_thresh_blue, high_thresh_blue = (88, 40, 35), (138, 255, 255) # Dùng ngưỡng rộng hơn
+# Vàng
+low_thresh_yellow, high_thresh_yellow = (15, 40, 60), (40, 255, 255) # Dùng ngưỡng rộng hơn
+print("HSV thresholds set. Adjust based on video conditions.")
 
-# --- Image Processing Helper Functions ---
+# --- Image Processing Helper Functions (Lấy từ code ảnh) ---
 def returnHSV(img):
     blur = cv.GaussianBlur(img, (5, 5), 0)
     hsv = cv.cvtColor(blur, cv.COLOR_BGR2HSV)
     return hsv
 
 def create_binary_mask_hsv(hsv_img):
-    # ... (Giữ nguyên logic tạo mask HSV, morphology kernel 3x3 iter=1) ...
     mask_red1 = cv.inRange(hsv_img, low_thresh_red1, high_thresh_red1)
     mask_red2 = cv.inRange(hsv_img, low_thresh_red2, high_thresh_red2)
     mask_red = cv.bitwise_or(mask_red1, mask_red2)
@@ -84,14 +95,13 @@ def create_binary_mask_hsv(hsv_img):
     mask_yellow = cv.inRange(hsv_img, low_thresh_yellow, high_thresh_yellow)
     combined_mask = cv.bitwise_or(mask_red, mask_blue)
     combined_mask = cv.bitwise_or(combined_mask, mask_yellow)
+    # Dùng kernel nhỏ và ít iteration hơn cho video để tránh mất chi tiết nhanh
     kernel = np.ones((3, 3), np.uint8)
     combined_mask = cv.morphologyEx(combined_mask, cv.MORPH_CLOSE, kernel, iterations=1)
     combined_mask = cv.morphologyEx(combined_mask, cv.MORPH_OPEN, kernel, iterations=1)
     return combined_mask
 
-
 def create_binary_mask_gray(gray_img):
-    # ... (Giữ nguyên logic tạo mask gray, morphology kernel 3x3 iter=1) ...
     gray_blur = cv.GaussianBlur(gray_img, (5, 5), 0)
     thresh_adapt = cv.adaptiveThreshold(gray_blur, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C,
                                         cv.THRESH_BINARY_INV, ADAPTIVE_BLOCK_SIZE, ADAPTIVE_C)
@@ -101,7 +111,7 @@ def create_binary_mask_gray(gray_img):
     return thresh_adapt
 
 def identify_shape(contour):
-    # ... (Giữ nguyên logic identify_shape) ...
+    # (Giữ nguyên logic từ code ảnh)
     shape = "unknown"
     perimeter = cv.arcLength(contour, True)
     if perimeter < 30: return shape, 0.0, 0.0
@@ -121,215 +131,254 @@ def identify_shape(contour):
         if circularity >= CIRCULARITY_THRESHOLD_FOR_CIRCLE: shape = "circle"
     return shape, solidity, circularity
 
-# --- Preprocessing function (Mean/Std Norm - Giữ nguyên) ---
+# --- Preprocessing function (SỬ DỤNG PHIÊN BẢN CỦA VIDEO GỐC - Mean/Std Norm) ---
+# !! QUAN TRỌNG: Giả định model_26.h5 được huấn luyện với cách này !!
 def preprocessingImageToClassifier(image=None, imageSize=32, mu=102.23982103497072, std=72.11947698025735):
-    # ... (Giữ nguyên) ...
-    if image is None or image.size == 0: return None
+    """Tiền xử lý ảnh cho mô hình (Mean/Std Normalization)."""
+    if image is None or image.size == 0:
+        # print("Warning: preprocessing received empty image.") # Giảm log
+        return None
     try:
-        if len(image.shape) == 3 and image.shape[2] == 3: gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
-        elif len(image.shape) == 2: gray = image
+        # Chuyển sang Grayscale
+        if len(image.shape) == 3 and image.shape[2] == 3:
+            gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+        elif len(image.shape) == 2:
+             gray = image
         else: return None
+
+        # Không dùng equalizeHist trừ khi model được huấn luyện cùng nó
+        # gray = cv.equalizeHist(gray)
+
         resized = cv.resize(gray, (imageSize, imageSize), interpolation=cv.INTER_AREA)
-        normalized = (resized - mu) / std
+        normalized = (resized - mu) / std # Z-score normalization
         reshaped = normalized.reshape(1, imageSize, imageSize, 1)
         return reshaped
     except Exception as e:
         print(f"Error in preprocessingImageToClassifier: {e}")
+        # traceback.print_exc()
         return None
 
-# --- Prediction Function (Giữ nguyên) ---
+# --- Prediction Function (Dùng đúng preprocessing) ---
 def predict(sign_image):
-    # ... (Giữ nguyên) ...
+    """Dự đoán nhãn và độ tin cậy."""
     if sign_image is None or sign_image.size == 0: return -1, 0.0
     try:
+        # Gọi hàm tiền xử lý ĐÚNG của video script
         img_array = preprocessingImageToClassifier(sign_image, imageSize=RESIZE_DIM[0])
         if img_array is None: return -1, 0.0
+
         prediction = model.predict(img_array, verbose=0)
         predicted_label = np.argmax(prediction)
         confidence = np.max(prediction)
         return predicted_label, confidence
     except Exception as e:
         print(f"Error during prediction: {e}")
+        # traceback.print_exc()
         return -1, 0.0
 
-# --- Sign Detection Function (REVISED - Thêm lọc vị trí) ---
+# --- NEW Sign Detection Function (Hàm chính để phát hiện) ---
 def findSigns(frame):
+    """Phát hiện, lọc và phân loại biển báo trong frame."""
     detected_rois = []
     detected_labels = []
-    detected_signs_info = {}
-    frame_height, frame_width, _ = frame.shape # Lấy kích thước
+    detected_signs_info = {} # Dùng dict để xử lý trùng lặp
+    frame_height, frame_width, _ = frame.shape
 
-    # 1 & 2: Tạo masks và tìm contours (Giữ nguyên)
+    # 1. Xử lý HSV
     hsv = returnHSV(frame)
     binary_mask_hsv = create_binary_mask_hsv(hsv)
     contours_hsv, _ = cv.findContours(binary_mask_hsv, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+
+    # 2. Xử lý Grayscale
     gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
     binary_mask_gray = create_binary_mask_gray(gray)
     contours_gray, _ = cv.findContours(binary_mask_gray, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+
+    # 3. Kết hợp contours
     all_contours = contours_hsv + contours_gray
 
     # 4. Lọc và xử lý từng contour
     for c in all_contours:
         area = cv.contourArea(c)
-        if MIN_SIGN_AREA < area < MAX_SIGN_AREA:
+        if MIN_SIGN_AREA < area < MAX_SIGN_AREA: # Thêm lại MAX_AREA
             x, y, w, h = cv.boundingRect(c)
             if w < 10 or h < 10: continue
 
-            # <<< BỘ LỌC MỚI: VỊ TRÍ DỌC >>>
-            # Chỉ xử lý nếu phần lớn contour nằm ở nửa trên của ảnh
-            # Ví dụ: Đáy của bounding box phải nằm trên 65% chiều cao ảnh
-            if (y + h) < frame_height * MAX_VERTICAL_POSITION_RATIO:
+            # Lọc sớm Aspect Ratio
+            aspect_ratio_early = float(w) / h
+            if not (EARLY_ASPECT_RATIO_MIN <= aspect_ratio_early <= EARLY_ASPECT_RATIO_MAX):
+                continue
 
-                # Lọc sớm Aspect Ratio tổng quát
-                aspect_ratio_early = float(w) / h
-                if not (EARLY_ASPECT_RATIO_MIN <= aspect_ratio_early <= EARLY_ASPECT_RATIO_MAX):
-                    continue
+            shape, solidity, circularity = identify_shape(c)
 
-                shape, solidity, circularity = identify_shape(c)
+            # Lọc Solidity
+            if solidity >= SOLIDITY_MIN_THRESHOLD:
+                # Lọc Hình dạng
+                if shape != "unknown":
+                    # Lọc Aspect Ratio theo hình dạng
+                    aspect_ratio = float(w) / h
+                    shape_aspect_ok = False
+                    if shape == "triangle" and TRIANGLE_ASPECT_RATIO_MIN <= aspect_ratio <= TRIANGLE_ASPECT_RATIO_MAX: shape_aspect_ok = True
+                    elif shape == "rectangle" and RECTANGLE_ASPECT_RATIO_MIN <= aspect_ratio <= RECTANGLE_ASPECT_RATIO_MAX: shape_aspect_ok = True
+                    elif shape in ["circle", "octagon"] and CIRCLE_OCTAGON_ASPECT_RATIO_MIN <= aspect_ratio <= CIRCLE_OCTAGON_ASPECT_RATIO_MAX: shape_aspect_ok = True
 
-                # Lọc Solidity
-                if solidity >= SOLIDITY_MIN_THRESHOLD:
-                    # Lọc Hình dạng
-                    if shape != "unknown":
-                        # Lọc Aspect Ratio theo hình dạng (ngưỡng chặt hơn)
-                        aspect_ratio = float(w) / h
-                        shape_aspect_ok = False
-                        if shape == "triangle" and TRIANGLE_ASPECT_RATIO_MIN <= aspect_ratio <= TRIANGLE_ASPECT_RATIO_MAX: shape_aspect_ok = True
-                        elif shape == "rectangle" and RECTANGLE_ASPECT_RATIO_MIN <= aspect_ratio <= RECTANGLE_ASPECT_RATIO_MAX: shape_aspect_ok = True
-                        elif shape in ["circle", "octagon"] and CIRCLE_OCTAGON_ASPECT_RATIO_MIN <= aspect_ratio <= CIRCLE_OCTAGON_ASPECT_RATIO_MAX: shape_aspect_ok = True
+                    if shape_aspect_ok:
+                        # <<< Bỏ comment nếu muốn lọc vị trí >>>
+                        # if (y + h) < frame_height * MAX_VERTICAL_POSITION_RATIO: # Ví dụ lọc 65% trên
+                        #     pass
+                        # else: continue
 
-                        if shape_aspect_ok:
-                            # Cắt ROI
-                            padding = 5
-                            y1, y2 = max(0, y - padding), min(frame_height, y + h + padding)
-                            x1, x2 = max(0, x - padding), min(frame_width, x + w + padding)
-                            sign_roi = frame[y1:y2, x1:x2]
+                        # Cắt ROI
+                        padding = 5
+                        y1, y2 = max(0, y - padding), min(frame_height, y + h + padding)
+                        x1, x2 = max(0, x - padding), min(frame_width, x + w + padding)
+                        sign_roi = frame[y1:y2, x1:x2]
 
-                            if sign_roi.size > 0:
-                                # Phân loại
-                                label_index, confidence = predict(sign_roi)
+                        if sign_roi.size > 0:
+                            # Phân loại
+                            label_index, confidence = predict(sign_roi)
 
-                                # Lọc Confidence (Ngưỡng cao)
-                                if label_index != -1 and confidence >= CONFIDENCE_THRESHOLD:
-                                    # Xử lý trùng lặp (Giữ nguyên)
-                                    center_x, center_y = x + w // 2, y + h // 2
-                                    is_duplicate = False
-                                    dist_factor_sq = DUPLICATE_DISTANCE_FACTOR**2
-                                    for center_key in list(detected_signs_info.keys()):
-                                        dist_sq = (center_x - center_key[0])**2 + (center_y - center_key[1])**2
-                                        old_w = detected_signs_info[center_key]['box'][2]
-                                        old_h = detected_signs_info[center_key]['box'][3]
-                                        threshold_dist_sq = ((max(w, old_w)**2)*dist_factor_sq + (max(h, old_h)**2)*dist_factor_sq)
-                                        if dist_sq < threshold_dist_sq:
-                                            if confidence > detected_signs_info[center_key]['confidence']:
-                                                del detected_signs_info[center_key]
-                                            else: is_duplicate = True
-                                            break
-                                    if not is_duplicate:
-                                        label_text = labelToText.get(label_index, f"L:{label_index}")
-                                        detected_signs_info[(center_x, center_y)] = {
-                                            'box': [x, y, w, h], 'label': label_text, 'confidence': confidence
-                                        }
+                            # Lọc Confidence
+                            if label_index != -1 and confidence >= CONFIDENCE_THRESHOLD:
+                                # Xử lý trùng lặp
+                                center_x, center_y = x + w // 2, y + h // 2
+                                is_duplicate = False
+                                dist_factor_sq = DUPLICATE_DISTANCE_FACTOR**2
+                                for center_key in list(detected_signs_info.keys()):
+                                    dist_sq = (center_x - center_key[0])**2 + (center_y - center_key[1])**2
+                                    old_w = detected_signs_info[center_key]['box'][2]
+                                    old_h = detected_signs_info[center_key]['box'][3]
+                                    threshold_dist_sq = ((max(w, old_w)**2)*dist_factor_sq + (max(h, old_h)**2)*dist_factor_sq)
+                                    if dist_sq < threshold_dist_sq:
+                                        if confidence > detected_signs_info[center_key]['confidence']:
+                                            del detected_signs_info[center_key]
+                                        else: is_duplicate = True
+                                        break
+                                if not is_duplicate:
+                                    label_text = labelToText.get(label_index, f"L:{label_index}")
+                                    # Lưu box và label
+                                    detected_signs_info[(center_x, center_y)] = {
+                                        'box': [x, y, w, h], # Lưu list [x,y,w,h]
+                                        'label': label_text,
+                                        'confidence': confidence
+                                    }
 
-    # Chuyển dict thành list trả về
+    # Chuyển đổi dict thành list rois và labels để trả về
     for sign_info in detected_signs_info.values():
-        detected_rois.append(np.array(sign_info['box']))
+        detected_rois.append(np.array(sign_info['box'])) # Chuyển thành numpy array
         detected_labels.append(sign_info['label'])
 
     return detected_rois, detected_labels
 
 # --- Main Video Processing Loop ---
-VIDEO_PATH = "static/videos/video39.mp4"
+VIDEO_PATH = "static/videos/video32.mp4" # Đảm bảo đúng đường dẫn
 cap = cv.VideoCapture(VIDEO_PATH)
 if not cap.isOpened():
     print(f"Error: Could not open video '{VIDEO_PATH}'.")
     exit()
 print(f"Opened video: '{VIDEO_PATH}'")
 
-isTracking = False
+isTracking = False # Bắt đầu không tracking
 frame_count = 0
-max_trackingFrame = 10 # Số frame tracking tối đa
+max_trackingFrame = 10 # Số frame tracking trước khi detect lại (có thể tăng/giảm)
 trackers = None
-labels = []
+current_labels = [] # Đổi tên `labels` thành `current_labels` để rõ ràng hơn
 
 while cap.isOpened():
     ret, frame = cap.read()
-    if not ret: break
+    if not ret:
+        print("End of video or cannot read frame.")
+        break
 
     # --- Logic Phát hiện hoặc Tracking ---
     if not isTracking:
         print(f"Frame {int(cap.get(cv.CAP_PROP_POS_FRAMES))}: Detecting objects...")
-        rois, labels = findSigns(frame) # Gọi hàm phát hiện mới
+        # Gọi hàm phát hiện MỚI
+        rois, detected_labels_this_frame = findSigns(frame)
         print(f"Detected {len(rois)} signs passing filters.")
 
         if rois:
             trackers = cv.legacy.MultiTracker_create()
+            current_labels = [] # Reset label cho các tracker mới
+            valid_tracker_count = 0
             for i, roi in enumerate(rois):
                 try:
-                    # Kiểm tra kiểu dữ liệu và chuyển đổi nếu cần
-                    if isinstance(roi, np.ndarray):
-                        roi_tuple = tuple(roi.astype(int)) # Chuyển thành tuple số nguyên
-                    elif isinstance(roi, (list, tuple)):
-                         roi_tuple = tuple(map(int, roi))
-                    else:
-                         print(f"Warning: Invalid ROI type {type(roi)}. Skipping.")
-                         continue
+                    # Chuyển ROI thành tuple số nguyên
+                    if isinstance(roi, np.ndarray): roi_tuple = tuple(roi.astype(int))
+                    elif isinstance(roi, (list, tuple)): roi_tuple = tuple(map(int, roi))
+                    else: continue # Bỏ qua nếu kiểu không đúng
 
-                    # Kiểm tra kích thước ROI hợp lệ
                     if roi_tuple[2] > 0 and roi_tuple[3] > 0: # w và h phải > 0
-                        tracker_instance = cv.legacy.TrackerCSRT_create()
-                        trackers.add(tracker_instance, frame, roi_tuple)
-                    else:
-                         print(f"Warning: Invalid ROI dimensions {roi_tuple}. Skipping.")
-
+                        tracker_instance = cv.legacy.TrackerCSRT_create() # Hoặc thử KCF, MOSSE
+                        # Thêm tracker vào MultiTracker
+                        success_add = trackers.add(tracker_instance, frame, roi_tuple)
+                        if success_add:
+                             current_labels.append(detected_labels_this_frame[i]) # Chỉ thêm label nếu add tracker thành công
+                             valid_tracker_count += 1
+                        # else:
+                        #     print(f"Warning: Failed to add tracker for ROI {roi_tuple}")
+                    # else:
+                    #     print(f"Warning: Invalid ROI dimensions {roi_tuple}. Skipping.")
                 except Exception as e:
                     print(f"Error adding tracker for ROI {roi}: {e}")
-            print(f"Initialized {len(trackers.getObjects())} trackers.")
-            if len(trackers.getObjects()) > 0:
+
+            print(f"Initialized {valid_tracker_count} trackers.")
+            if valid_tracker_count > 0:
                 isTracking = True
                 frame_count = 0
             else: # Không khởi tạo được tracker nào
                  isTracking = False
-                 labels = [] # Xóa labels nếu không có tracker
+                 current_labels = [] # Reset labels
 
-        else:
-            isTracking = False # Không có gì để track
+        else: # Không detect được ROI nào
+            isTracking = False
 
     else: # Đang tracking
+        # Kiểm tra nếu cần reset tracker
         if frame_count >= max_trackingFrame or trackers is None or len(trackers.getObjects()) == 0:
-            isTracking = False; frame_count = 0; trackers = None; labels = []
-            print(f"Frame {int(cap.get(cv.CAP_PROP_POS_FRAMES))}: Resetting tracker.")
-            continue
+            print(f"Frame {int(cap.get(cv.CAP_PROP_POS_FRAMES))}: Resetting tracker (timeout or lost).")
+            isTracking = False; frame_count = 0; trackers = None; current_labels = []
+            continue # Bỏ qua frame này, detect lại ở frame sau
 
+        # Cập nhật tracker
         ret_track, objs = trackers.update(frame)
 
-        # <<< QUAN TRỌNG: Cập nhật lại danh sách labels nếu số lượng tracker thay đổi >>>
-        # Một số tracker có thể bị mất dấu hoặc lỗi và MultiTracker tự loại bỏ chúng
-        if len(objs) != len(labels):
-             print(f"Warning: Tracker count ({len(objs)}) mismatch with label count ({len(labels)}). Tracking likely failed. Resetting.")
-             isTracking = False; trackers = None; labels = []
-             continue # Detect lại ở frame sau
+        # Kiểm tra số lượng tracker và label có khớp không
+        if len(objs) != len(current_labels):
+             print(f"Warning: Tracker count ({len(objs)}) mismatch with label count ({len(current_labels)}). Resetting.")
+             isTracking = False; trackers = None; current_labels = []
+             continue
 
         if ret_track:
+            # Vẽ kết quả tracking
             for i, obj in enumerate(objs):
                 p1 = (int(obj[0]), int(obj[1]))
                 p2 = (int(obj[0] + obj[2]), int(obj[1] + obj[3]))
+                # Vẽ nếu tọa độ hợp lệ và kích thước > 0
                 if p1[0] >= 0 and p1[1] >= 0 and p2[0] <= frame.shape[1] and p2[1] <= frame.shape[0] and obj[2]>0 and obj[3]>0:
                      cv.rectangle(frame, p1, p2, (0, 255, 0), 2, 1)
-                     (text_width, text_height), baseline = cv.getTextSize(labels[i], cv.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-                     cv.rectangle(frame, (p1[0], p1[1] - text_height - baseline - 2), (p1[0] + text_width + 2, p1[1]), (0,0,0), -1)
-                     cv.putText(frame, labels[i], (p1[0] + 1, p1[1] - baseline ), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                     label_to_draw = current_labels[i] # Lấy label tương ứng
+                     (text_width, text_height), baseline = cv.getTextSize(label_to_draw, cv.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+                     # Đảm bảo nền text không vẽ ra ngoài ảnh
+                     text_bg_y1 = max(0, p1[1] - text_height - baseline - 2)
+                     text_y = max(text_height + baseline, p1[1] - baseline) # Đảm bảo text không vẽ ra ngoài
+                     cv.rectangle(frame, (p1[0], text_bg_y1), (p1[0] + text_width + 2, p1[1]), (0,0,0), -1)
+                     cv.putText(frame, label_to_draw, (p1[0] + 1, text_y -1), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         else:
             print(f"Frame {int(cap.get(cv.CAP_PROP_POS_FRAMES))}: Tracking update failed. Resetting.")
-            isTracking = False; trackers = None; labels = []
+            isTracking = False; trackers = None; current_labels = []
 
         frame_count += 1
 
     # --- Hiển thị Frame ---
     cv.imshow('Video Sign Detection', frame)
-    key = cv.waitKey(10) # Chờ phím, giảm thời gian chờ nếu video nhanh
-    if key == ord('q'): break
-    elif key == ord('d'): isTracking = False; trackers = None; labels = [] # Buộc detect lại
+    key = cv.waitKey(10) # Đợi 10ms, có thể giảm xuống 1 nếu muốn nhanh hơn
+    if key == ord('q'):
+        print("Exiting...")
+        break
+    elif key == ord('d'): # Nhấn 'd' để buộc detect lại
+        print("Forcing re-detection...")
+        isTracking = False; trackers = None; current_labels = []
 
 # --- Dọn dẹp ---
 cap.release()
