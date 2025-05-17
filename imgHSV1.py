@@ -1,30 +1,16 @@
 import cv2 as cv
 import numpy as np
 from keras.models import load_model # type: ignore
+from tkinter import Tk, filedialog
+from PIL import Image
 from tkinter import Tk, filedialog, Button, Label
 from PIL import Image, ImageTk
 import tkinter as tk
-import math
 
-# --- Constants ---
-MIN_SIGN_AREA = 150
-MAX_SIGN_AREA = 50000
-# Loại bỏ các ngưỡng hình học chung không cần thiết nữa nếu dùng approxPolyDP
-# ASPECT_RATIO_MIN = 0.5
-# ASPECT_RATIO_MAX = 1.5
-# SOLIDITY_MIN = 0.4
-CIRCULARITY_THRESHOLD_FOR_CIRCLE = 0.75 # Ngưỡng độ tròn để xác định là hình tròn
-CONFIDENCE_THRESHOLD = 0.70 # Giảm nhẹ để thử nghiệm
-RESIZE_DIM = (32, 32)
+# Load mô hình nhận diện biển báo
+model = load_model("Traffic_Sign\model_24.h5")
 
-# --- Load Model and Labels (Giữ nguyên) ---
-try:
-    model = load_model("model_26.h5")
-    print("Model loaded successfully.")
-except Exception as e:
-    print(f"Error loading model: {e}")
-    exit()
-
+# Định nghĩa nhãn biển báo
 labelToText = {
     0: 'Speed limit (20km/h)', 1: 'Speed limit (30km/h)', 2: 'Speed limit (50km/h)',
     3: 'Speed limit (60km/h)', 4: 'Speed limit (70km/h)', 5: 'Speed limit (80km/h)',
@@ -37,227 +23,205 @@ labelToText = {
     29: 'Bicycles crossing', 30: 'Beware of ice/snow', 31: 'Wild animals crossing',
     32: 'End speed + passing limits', 33: 'Turn right ahead', 34: 'Turn left ahead',
     35: 'Ahead only', 36: 'Go straight or right', 37: 'Go straight or left', 38: 'Keep right',
-    39: 'Keep left', 40: 'Roundabout mandatory', 41: 'End of no passing', 42: 'End no passing vehicles > 3.5 tons'
-}
+    39: 'Keep left', 40: 'Roundabout mandatory',
+    41: 'End of no passing',
+    42: 'End no passing vehicles > 3.5 tons'}
 
-
-# --- Image Processing Functions (Giữ nguyên returnHSV, create_binary_mask) ---
+# Chuyển đổi sang ảnh HSV
 def returnHSV(img):
-    """Chuyển đổi ảnh sang HSV và làm mờ nhẹ."""
-    blur = cv.GaussianBlur(img, (5, 5), 0)
+    # cv.imshow("Original Image", img)
+    # cv.waitKey(0)
+    
+    blur = cv.GaussianBlur(img, (5,5), 0)
+    # cv.imshow("Blurred Image", blur)
+    # cv.waitKey(0)
+    
     hsv = cv.cvtColor(blur, cv.COLOR_BGR2HSV)
+    # cv.imshow("HSV Image", hsv)
+    # cv.waitKey(0)
+    
     return hsv
 
-# Ngưỡng màu (điều chỉnh nếu cần dựa trên thử nghiệm)
-low_thresh_red1, high_thresh_red1 = (165, 80, 80), (179, 255, 255) # Dải đỏ 1 (tăng nhẹ Saturation/Value min)
-low_thresh_red2, high_thresh_red2 = (0, 80, 80), (10, 255, 255)     # Dải đỏ 2
-low_thresh_blue, high_thresh_blue = (95, 80, 80), (130, 255, 255)  # Dải xanh dương
-low_thresh_yellow, high_thresh_yellow = (18, 80, 80), (35, 255, 255) # Dải vàng
+# Ngưỡng để lọc màu
+low_thresh1, high_thresh1 = (165, 100, 40), (179, 255, 255)
+low_thresh2, high_thresh2 = (0, 160, 40), (10, 255, 255)
+low_thresh3, high_thresh3 = (100, 150, 40), (130, 255, 255)
+low_thresh4, high_thresh4 = (25, 100, 100), (35, 255, 255)  # Ngưỡng cho màu vàng
 
-def create_binary_mask(hsv_img):
-    """Tạo ảnh nhị phân kết hợp cho các màu đỏ, xanh, vàng."""
-    mask_red1 = cv.inRange(hsv_img, low_thresh_red1, high_thresh_red1)
-    mask_red2 = cv.inRange(hsv_img, low_thresh_red2, high_thresh_red2)
-    mask_red = cv.bitwise_or(mask_red1, mask_red2)
+# Tạo ảnh nhị phân dựa trên màu sắc
+def binaryImg(img):
+    hsv = returnHSV(img)
+    b_img_red = cv.inRange(hsv, low_thresh1, high_thresh1) | cv.inRange(hsv, low_thresh2, high_thresh2)
+    b_img_blue = cv.inRange(hsv, low_thresh3, high_thresh3)
+    # b_img_yellow = cv.inRange(hsv, low_thresh4, high_thresh4)
+    # cv.imshow("Red Binary Image", b_img_red)
+    # cv.waitKey(0)
+    # cv.imshow("Blue Binary Image", b_img_blue)
+    # cv.waitKey(0)
+    # Giảm nhiễu bằng phép toán đóng (Closing)
+    kernel = np.ones((5,5), np.uint8)
+    b_img_red = cv.morphologyEx(b_img_red, cv.MORPH_CLOSE, kernel)
+    b_img_blue = cv.morphologyEx(b_img_blue, cv.MORPH_CLOSE, kernel)
+    return b_img_red, b_img_blue
 
-    mask_blue = cv.inRange(hsv_img, low_thresh_blue, high_thresh_blue)
-    mask_yellow = cv.inRange(hsv_img, low_thresh_yellow, high_thresh_yellow)
+# Xử lý ảnh trước khi đưa vào mô hình
+def grayscale(img):
+    img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+    return img
 
-    combined_mask = cv.bitwise_or(mask_red, mask_blue)
-    combined_mask = cv.bitwise_or(combined_mask, mask_yellow)
+def equalize(img):
+    img = cv.equalizeHist(img)
+    return img
 
-    kernel = np.ones((5, 5), np.uint8)
-    combined_mask = cv.morphologyEx(combined_mask, cv.MORPH_CLOSE, kernel)
-    combined_mask = cv.morphologyEx(combined_mask, cv.MORPH_OPEN, kernel) # Thêm OPEN để loại bỏ nhiễu tốt hơn
-
-    return combined_mask
-
-# --- Preprocessing for Model (Giữ nguyên) ---
 def preprocessing(img):
-    """Tiền xử lý ảnh đầu vào cho mô hình CNN."""
     gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+    # cv.imshow("Grayscale Image", gray)
+    # cv.waitKey(0)
+    
     equalized = cv.equalizeHist(gray)
-    resized = cv.resize(equalized, RESIZE_DIM)
-    normalized = resized / 255.0
-    # Nếu dùng Z-score khi huấn luyện, áp dụng ở đây
-    return normalized
+    # cv.imshow("Equalized Image", equalized)
+    # cv.waitKey(0)
+    
+    img = equalized / 255
+    return img
 
-# --- Prediction Function (Giữ nguyên) ---
-def predict(sign_image):
-    """Dự đoán nhãn và độ tin cậy cho ảnh biển báo đã tiền xử lý."""
-    if sign_image is None or sign_image.size == 0:
-        return -1, 0.0
+# def preprocessingImage(image, imageSize=32, mu=102.24, std=72.12):
+#     image = cv.cvtColor(image, cv.COLOR_RGB2GRAY)
+#     image = cv.resize(image, (imageSize, imageSize))
+#     image = (image - mu) / std
+#     image = image.reshape(1, imageSize, imageSize, 1)
+#     return image
 
-    try:
-        processed_img = preprocessing(sign_image)
-        img_array = processed_img.reshape(1, RESIZE_DIM[0], RESIZE_DIM[1], 1)
-        prediction = model.predict(img_array)
-        predicted_label = np.argmax(prediction)
-        confidence = np.max(prediction)
-        return predicted_label, confidence
-    except Exception as e:
-        print(f"Error during prediction: {e}")
-        return -1, 0.0
+# Dự đoán nhãn biển báo
+def predict(sign):
+    img = preprocessing(sign)
+    img = cv.resize(img, (32, 32))
+    # cv.imshow("Preprocessed Image (32x32)", img)
+    # cv.waitKey(0)
+    
+    img = img.reshape(1, 32, 32, 1)
+    return np.argmax(model.predict(img))
 
-# --- Shape Identification Function (NEW/REVISED) ---
-def identify_shape(contour):
-    """Xác định hình dạng của contour (tròn, tam giác, chữ nhật, bát giác, hoặc khác)."""
-    shape = "unknown"
+
+def is_circular(contour):
+    """
+    Kiểm tra xem contour có dạng hình tròn hay không.
+    """
     perimeter = cv.arcLength(contour, True)
     if perimeter == 0:
-        return shape # Không thể xấp xỉ nếu chu vi là 0
+        return False
+    area = cv.contourArea(contour)
+    circularity = 4 * np.pi * (area / (perimeter ** 2))
+    return 0.7 < circularity < 1.2  # Giá trị gần 1 là hình tròn
 
-    # Xấp xỉ contour bằng đa giác
-    # Epsilon là khoảng cách tối đa từ contour gốc đến contour xấp xỉ.
-    # Giá trị 0.03 * perimeter là một giá trị thường dùng, có thể cần điều chỉnh.
-    epsilon = 0.03 * perimeter
-    approx = cv.approxPolyDP(contour, epsilon, True)
+def is_triangle_or_rectangle(contour):
+    """
+    Kiểm tra xem contour có phải hình tam giác hoặc hình chữ nhật không.
+    """
+    approx = cv.approxPolyDP(contour, 0.04 * cv.arcLength(contour, True), True)
+    if len(approx) == 3:  # Hình tam giác
+        return "triangle"
+    elif len(approx) == 4:  # Hình chữ nhật/vuông
+        return "rectangle"
+    return None  # Không phải hình tam giác hay hình chữ nhật
+
+def is_specific_shape(contour):
+    """
+    Kiểm tra xem contour có phải là hình thoi hoặc hình bát giác không.
+    """
+    approx = cv.approxPolyDP(contour, 0.04 * cv.arcLength(contour, True), True)
     num_vertices = len(approx)
 
-    # Tính độ tròn
-    area = cv.contourArea(contour)
-    circularity = 4 * np.pi * (area / (perimeter ** 2)) if perimeter > 0 else 0
-
-    # Xác định hình dạng dựa trên số đỉnh và độ tròn
-    if num_vertices == 3:
-        shape = "triangle"
-    elif num_vertices == 4:
-        # Có thể là vuông hoặc chữ nhật (hoặc thoi)
-        shape = "rectangle" # Giả định là chữ nhật/vuông cho biển báo
+    if num_vertices == 4:
+        return "diamond"  # Hình thoi
     elif num_vertices == 8:
-        shape = "octagon"
-    elif num_vertices > 8: # Nếu có nhiều đỉnh và độ tròn cao -> hình tròn
-        if circularity >= CIRCULARITY_THRESHOLD_FOR_CIRCLE:
-             shape = "circle"
-    # Bạn có thể thêm các trường hợp khác nếu cần (vd: hình thoi)
+        return "octagon"  # Hình bát giác
+    return None  # Không phải hình cần tìm
 
-    # print(f"Vertices: {num_vertices}, Circularity: {circularity:.2f}, Detected Shape: {shape}") # Để debug
-    return shape
-
-
-# --- Sign Detection Function (REVISED) ---
 def findSigns(frame):
-    """Phát hiện và phân loại biển báo trong ảnh."""
-    hsv = returnHSV(frame)
-    binary_mask = create_binary_mask(hsv)
+    b_img_red, b_img_blue = binaryImg(frame)
 
-    contours, _ = cv.findContours(binary_mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+    contours_red, _ = cv.findContours(b_img_red, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+    contours_blue, _ = cv.findContours(b_img_blue, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 
-    detected_signs = []
-    output_frame = frame.copy()
+    used_positions = []  # Danh sách lưu vị trí các label đã đặt
 
-    for c in contours:
+    for c in contours_red + contours_blue:
         area = cv.contourArea(c)
+        x, y, w, h = cv.boundingRect(c)
 
-        # 1. Lọc theo diện tích
-        if MIN_SIGN_AREA < area < MAX_SIGN_AREA:
-            # 2. Xác định hình dạng
-            shape = identify_shape(c)
+        # Kiểm tra hình dạng
+        shape = is_triangle_or_rectangle(c)
+        is_circle = is_circular(c)
+        specific_shape = is_specific_shape(c)
 
-            # 3. Chỉ xử lý các hình dạng mong muốn (tam giác, chữ nhật, bát giác, tròn)
-            if shape in ["triangle", "rectangle", "octagon", "circle"]:
-                x, y, w, h = cv.boundingRect(c)
+        # Xác định nếu contour là hình hợp lệ
+        if area > 1500 and (is_circle or shape in ["triangle", "rectangle"] or specific_shape in ["diamond", "octagon"]):
+            sign = frame[y:y+h, x:x+w]
+            label = predict(sign)
+            label_text = labelToText.get(label, "Unknown Sign")
 
-                # 4. Cắt vùng ảnh nghi ngờ (với lề)
-                padding = 5
-                y1 = max(0, y - padding)
-                y2 = min(frame.shape[0], y + h + padding)
-                x1 = max(0, x - padding)
-                x2 = min(frame.shape[1], x + w + padding)
-                sign = frame[y1:y2, x1:x2]
+            # Xử lý vị trí tránh đè label
+            text_x, text_y = x, y - 10  # Vị trí mặc định
+            min_distance = 20  # Khoảng cách tối thiểu giữa các label
 
-                if sign.size > 0:
-                    # 5. Dự đoán và lấy độ tin cậy
-                    label_index, confidence = predict(sign)
+            # Kiểm tra nếu vị trí này bị trùng
+            for (px, py) in used_positions:
+                if abs(text_y - py) < min_distance:  # Nếu khoảng cách quá gần
+                    text_y += min_distance  # Dời xuống để tránh đè
 
-                    # 6. Lọc theo ngưỡng tin cậy
-                    if label_index != -1 and confidence >= CONFIDENCE_THRESHOLD:
-                        label_text = labelToText.get(label_index, f"Unknown ({label_index})")
-                        display_text = f"{label_text} ({shape}, {confidence:.2f})" # Thêm tên hình dạng vào text
+            used_positions.append((text_x, text_y))  # Lưu vị trí đã dùng
 
-                        detected_signs.append({'box': (x, y, w, h), 'text': display_text, 'y_pos': y})
+            # Vẽ hình chữ nhật xung quanh biển báo
+            cv.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+            cv.putText(frame, label_text, (text_x, text_y), cv.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
 
-    # Sắp xếp và vẽ kết quả (giống như trước)
-    detected_signs.sort(key=lambda item: item['y_pos'])
-    last_text_y = -100
-    text_gap = 20
+    return frame
 
-    for sign_info in detected_signs:
-        x, y, w, h = sign_info['box']
-        display_text = sign_info['text']
-        cv.rectangle(output_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-
-        text_x = x
-        text_y = y - 10
-        if text_y < 10: text_y = y + h + 15
-        if abs(text_y - last_text_y) < text_gap: text_y = last_text_y + text_gap
-
-        (text_width, text_height), baseline = cv.getTextSize(display_text, cv.FONT_HERSHEY_SIMPLEX, 0.5, 1) # Giảm cỡ chữ một chút
-        cv.rectangle(output_frame, (text_x, text_y - text_height - baseline), (text_x + text_width, text_y + baseline), (0, 0, 0), -1)
-        cv.putText(output_frame, display_text, (text_x, text_y), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-
-        last_text_y = text_y
-
-    return output_frame
-
-
-# --- GUI Class (Giữ nguyên) ---
+# Giao diện tải ảnh
 class TrafficSignApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Traffic Sign Detection")
-        self.root.geometry("800x700")
+        self.root.geometry("600x600")  # Mở rộng khung để hiển thị tốt hơn
 
-        self.label = Label(root, text="Upload an image for traffic sign detection", font=("Arial", 14))
-        self.label.pack(pady=15)
+        # Label hướng dẫn
+        self.label = Label(root, text="Upload an image", font=("Arial", 12))
+        self.label.pack(pady=10)
 
-        self.upload_button = Button(root, text="Choose Image", command=self.load_image, font=("Arial", 12), width=20, height=2)
+          # Nút Upload Image
+        self.upload_button = Button(root, text="Choose Image", command=self.load_image)
         self.upload_button.pack(pady=10)
 
-        self.panel_width = 700
-        self.panel_height = 500
-        self.panel = Label(root, bg="lightgray", width=self.panel_width, height=self.panel_height)
-        self.panel.pack(pady=10, padx=10, expand=True, fill="both")
+        # Khung chứa ảnh (Giữ khoảng trống để in tên biển báo)
+        self.panel = Label(root, bg="gray")
+        self.panel.pack(pady=10)
+
+        # Label hiển thị tên biển báo
+        self.result_label = Label(root, text="", font=("Arial", 12), fg="blue")
+        self.result_label.pack(pady=5)
 
     def load_image(self):
-        file_path = filedialog.askopenfilename(
-            title="Select an Image File",
-            filetypes=[("Image Files", "*.jpg *.jpeg *.png *.bmp *.tiff")]
-        )
-        if not file_path: return
-
-        try:
+        file_path = filedialog.askopenfilename()
+        if file_path:
             image = cv.imread(file_path)
-            if image is None:
-                print(f"Error: Could not read image file {file_path}")
-                self.label.config(text=f"Error loading image: {file_path}")
-                return
-
-            self.root.update_idletasks()
             detected_image = findSigns(image)
+            detected_image = cv.cvtColor(detected_image, cv.COLOR_BGR2RGB)
 
-            detected_image_rgb = cv.cvtColor(detected_image, cv.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(detected_image_rgb)
+            # Giữ nguyên kích thước ảnh gốc
+            max_width, max_height = 800, 600
+            img = Image.fromarray(detected_image)
+            img.thumbnail((max_width, max_height))
+            img = ImageTk.PhotoImage(img)
 
-            panel_w = self.panel.winfo_width()
-            panel_h = self.panel.winfo_height()
-            if panel_w <= 1 or panel_h <= 1:
-                 panel_w = self.panel_width
-                 panel_h = self.panel_height
+            # Cập nhật Label để hiển thị ảnh
+            self.panel.config(image=img)
+            self.panel.image = img
 
-            pil_image.thumbnail((panel_w - 20, panel_h - 20), Image.Resampling.LANCZOS)
+            # Cập nhật kích thước và căn giữa lại
+            self.panel.place(relx=0.5, rely=0.5, anchor="center")
 
-            imgtk = ImageTk.PhotoImage(pil_image)
-            self.panel.config(image=imgtk, width=panel_w, height=panel_h)
-            self.panel.image = imgtk
-            self.label.config(text="Detection complete. Choose another image.")
-
-        except Exception as e:
-            print(f"An error occurred during processing: {e}")
-            self.label.config(text=f"Error processing image: {str(e)}")
-
-# --- Main Execution (Giữ nguyên) ---
 if __name__ == "__main__":
     root = tk.Tk()
     app = TrafficSignApp(root)
-    root.mainloop()
+    root.mainloop() 

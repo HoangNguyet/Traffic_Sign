@@ -1,8 +1,8 @@
-import cv2 as cv # Thư viện OpenCV cho xử lý ảnh
+import cv2 as cv # type: ignore # Thư viện OpenCV cho xử lý ảnh
 import numpy as np # Thư viện NumPy cho xử lý mảng (ảnh)
 from keras.models import load_model # type: ignore    # Hàm tải mô hình Keras đã huấn luyện
 from tkinter import Tk, filedialog, Button, Label # Thư viện Tkinter cho giao diện đồ họa
-from PIL import Image, ImageTk # Thư viện Pillow (PIL) để xử lý và hiển thị ảnh trên Tkinter
+from PIL import Image, ImageTk # type: ignore # Thư viện Pillow (PIL) để xử lý và hiển thị ảnh trên Tkinter
 import tkinter as tk
 import math
 
@@ -55,7 +55,7 @@ RESIZE_DIM = (32, 32)   # Kích thước ảnh đầu vào cho mô hình
 # --- Load Model and Labels ---
 try:
     # Đảm bảo file model nằm trong cùng thư mục hoặc cung cấp đường dẫn đầy đủ
-    model = load_model("model_24.h5")
+    model = load_model("Traffic_Sign\model_24.h5")
     print("Model loaded successfully.")
 except Exception as e:
     print(f"Error loading model: {e}")
@@ -220,6 +220,7 @@ def findSigns(frame):
     gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
     binary_mask_gray = create_binary_mask_gray(gray)
     # cv.imshow("Gray Mask", binary_mask_gray) # Bỏ comment dòng này để debug mask xám
+    # cv2.findContours(hình ảnh, chế độ, phương pháp)
     contours_gray, _ = cv.findContours(binary_mask_gray, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 
     # 3. Kết hợp contour từ cả hai phương pháp
