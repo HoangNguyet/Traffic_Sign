@@ -11,9 +11,9 @@ import pickle
 from sklearn.utils import shuffle
 import os
 import pandas as pd
-from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.preprocessing.image import ImageDataGenerator # type: ignore
 from sklearn.utils.class_weight import compute_class_weight
-from tensorflow.keras.callbacks import ReduceLROnPlateau
+from tensorflow.keras.callbacks import ReduceLROnPlateau # type: ignore
 
 # Đường dẫn và tham số
 path = "/content/Dataset/Dataset"

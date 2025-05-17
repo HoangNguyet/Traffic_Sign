@@ -55,7 +55,7 @@ RESIZE_DIM = (32, 32)   # Kích thước ảnh đầu vào cho mô hình
 # --- Load Model and Labels ---
 try:
     # Đảm bảo file model nằm trong cùng thư mục hoặc cung cấp đường dẫn đầy đủ
-    model = load_model("Traffic_Sign\model_24.h5")
+    model = load_model("model_24.h5")
     print("Model loaded successfully.")
 except Exception as e:
     print(f"Error loading model: {e}")
@@ -93,13 +93,25 @@ def returnHSV(img):
 
 # Ngưỡng màu HSV (Rất quan trọng - Cần tinh chỉnh dựa trên thử nghiệm!)
 # Dải màu đỏ (cần 2 dải do Hue quay vòng)
-low_thresh_red1, high_thresh_red1 = (165, 40, 40), (179, 255, 255)
-low_thresh_red2, high_thresh_red2 = (0, 40, 40), (10, 255, 255)
-# Dải màu xanh dương (mở rộng để bắt nhiều sắc thái hơn)
-low_thresh_blue, high_thresh_blue = (100, 150, 40), (130, 255, 255)
-# Dải màu vàng (mở rộng)
-low_thresh_yellow, high_thresh_yellow = (15, 192, 147), (22, 255, 255)
+# low_thresh_red1, high_thresh_red1 = (165, 40, 40), (179, 255, 255)
+# low_thresh_red1, high_thresh_red1 = (136, 87, 11), (179, 255, 255)
 
+# low_thresh_red2, high_thresh_red2 = (0, 40, 40), (10, 255, 255)
+# Dải màu xanh dương (mở rộng để bắt nhiều sắc thái hơn)
+# low_thresh_blue, high_thresh_blue = (100, 150, 40), (130, 255, 255)
+# low_thresh_blue, high_thresh_blue = (94,80,2), (120, 255, 255)
+
+# Dải màu vàng (mở rộng)
+# low_thresh_yellow, high_thresh_yellow = (15, 192, 147), (22, 255, 255)
+# low_thresh_red1, high_thresh_red1 = (165, 80, 80), (179, 255, 255) # Dải đỏ 1 (tăng nhẹ Saturation/Value min)
+# low_thresh_red2, high_thresh_red2 = (0, 80, 80), (10, 255, 255)     # Dải đỏ 2
+# low_thresh_blue, high_thresh_blue = (95, 80, 80), (130, 255, 255)  # Dải xanh dương
+# low_thresh_yellow, high_thresh_yellow = (18, 80, 80), (35, 255, 255) # Dải vàng
+
+low_thresh_red1, high_thresh_red1 = (160, 40, 40), (180, 255, 255) # Dải đỏ 1 (tăng nhẹ Saturation/Value min)
+low_thresh_red2, high_thresh_red2 = (0, 70, 70), (25, 255, 255)     # Dải đỏ 2
+low_thresh_blue, high_thresh_blue = (90, 70, 50), (130, 255, 255)  # Dải xanh dương
+low_thresh_yellow, high_thresh_yellow = (18, 80, 80), (30, 255, 255) # Dải vàng
 def create_binary_mask_hsv(hsv_img):
     """Tạo mask nhị phân kết hợp cho các màu đỏ, xanh, vàng từ ảnh HSV."""
     mask_red1 = cv.inRange(hsv_img, low_thresh_red1, high_thresh_red1)

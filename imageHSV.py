@@ -1,8 +1,8 @@
-import cv2 as cv
-import numpy as np
-from keras.models import load_model # type: ignore
-from tkinter import Tk, filedialog, Button, Label
-from PIL import Image, ImageTk
+import cv2 as cv #thư viện open cv xử lý ảnh
+import numpy as np #Thư viện xử lý mảng
+from keras.models import load_model # type: ignore #hàm tải mô hình đã huấn luyện
+from tkinter import Tk, filedialog, Button, Label #Thư viện cho giao diện đồ họa
+from PIL import Image, ImageTk #Thư viện Pillow (PIL) để xử lý và hiển thị ảnh trên Tkinter
 import tkinter as tk
 import math # Sử dụng cho tính toán aspect ratio
 
