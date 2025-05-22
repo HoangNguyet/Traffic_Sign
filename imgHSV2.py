@@ -1,472 +1,352 @@
 import cv2 as cv
 import numpy as np
-from keras.models import load_model # type: ignore
+from keras.models import load_model
 from tkinter import Tk, filedialog, Button, Label
 from PIL import Image, ImageTk
 import tkinter as tk
-import math
-# Thêm các import cần thiết cho GUI Threading
-from queue import Queue, Empty
-import threading
-import logging # Sử dụng logging thay print cho lỗi
+from threading import Thread
 
-# --- Constants ---
-# Cần được TINH CHỈNH KỸ LƯỠNG thông qua thử nghiệm!
+# Global font and color settings
+font_face = cv.FONT_HERSHEY_SIMPLEX
+font_scale = 0.7
+font_thickness = 1
+text_color = (255, 255, 255)  # White (BGR)
+bg_color = (0, 0, 255)        # Red (BGR)
+text_padding = 5
 
-# Lọc Contour cơ bản
-MIN_SIGN_AREA = 200      # <<< TĂNG nhẹ, lọc nhiễu tốt hơn
-MAX_SIGN_AREA = 70000    # <<< GIẢM nhẹ, loại bỏ vùng lớn bất thường
-
-# Ngưỡng nhận dạng hình dạng
-APPROX_EPSILON_FACTOR = 0.025 # <<< GIẢM nhẹ, bám sát hình dạng hơn
-
-# Ngưỡng Hình học (QUAN TRỌNG - Cần tăng để lọc chặt hơn)
-SOLIDITY_MIN_THRESHOLD = 0.80 # <<< TĂNG ĐÁNG KỂ, loại bỏ hình không đặc
-CIRCULARITY_THRESHOLD_FOR_CIRCLE = 0.75 # <<< TĂNG ĐÁNG KỂ cho hình tròn/bát giác
-
-# Ngưỡng tỷ lệ khung hình (Aspect Ratio = Width / Height) - SAU KHI xác định hình dạng
-RECTANGLE_ASPECT_RATIO_MIN = 0.7 # Cho phép chữ nhật hơi dọc/ngang
-RECTANGLE_ASPECT_RATIO_MAX = 2.5 # Nới rộng hơn một chút cho biển chữ nhật dài
-TRIANGLE_ASPECT_RATIO_MIN = 0.6
-TRIANGLE_ASPECT_RATIO_MAX = 1.5 # Tam giác có thể hơi không đều cạnh
-CIRCLE_OCTAGON_ASPECT_RATIO_MIN = 0.7 # <<< Siết chặt hơn, gần 1.0
-CIRCLE_OCTAGON_ASPECT_RATIO_MAX = 1.3 # <<< Siết chặt hơn, gần 1.0
-
-# Ngưỡng phân loại (QUAN TRỌNG - Tăng cao để giảm sai sót)
-CONFIDENCE_THRESHOLD = 0.90 # <<< TĂNG CAO, chỉ tin những dự đoán chắc chắn
-RESIZE_DIM = (32, 32)   # Kích thước ảnh đầu vào cho mô hình
-
-# Kernel size cho Morphology (có thể thử nghiệm 5x5 hoặc 7x7)
-MORPH_KERNEL_SIZE = (5, 5)
-
-# --- Load Model and Labels ---
+# Load mô hình
 try:
-    # Đảm bảo file model nằm trong cùng thư mục hoặc cung cấp đường dẫn đầy đủ
-    model = load_model("model_24.h5")
-    logging.info("Model loaded successfully.")
+    model = load_model("Traffic_Sign/model_26.h5")
 except Exception as e:
-    logging.error(f"Error loading model: {e}", exc_info=True)
-    logging.error("Please ensure 'model_24.h5' is in the correct directory.")
+    print(f"Lỗi khi tải model: {e}")
     exit()
 
-# Dictionary ánh xạ chỉ số lớp sang tên biển báo (giữ nguyên)
+# Định nghĩa nhãn GTSRB
 labelToText = {
     0: 'Speed limit (20km/h)', 1: 'Speed limit (30km/h)', 2: 'Speed limit (50km/h)',
-    # ... (giữ nguyên phần còn lại của dictionary) ...
+    3: 'Speed limit (60km/h)', 4: 'Speed limit (70km/h)', 5: 'Speed limit (80km/h)',
+    6: 'End of speed limit (80km/h)', 7: 'Speed limit (100km/h)', 8: 'Speed limit (120km/h)',
+    9: 'No passing', 10: 'No passing vehicles over 3.5 tons', 11: 'Right-of-way at intersection',
+    12: 'Priority road', 13: 'Yield', 14: 'Stop', 15: 'No vehicles', 16: 'Vehicles > 3.5 tons prohibited',
+    17: 'No entry', 18: 'General caution', 19: 'Dangerous curve left', 20: 'Dangerous curve right',
+    21: 'Double curve', 22: 'Bumpy road', 23: 'Slippery road', 24: 'Road narrows on the right',
+    25: 'Road work', 26: 'Traffic signals', 27: 'Pedestrians', 28: 'Children crossing',
+    29: 'Bicycles crossing', 30: 'Beware of ice/snow', 31: 'Wild animals crossing',
+    32: 'End speed + passing limits', 33: 'Turn right ahead', 34: 'Turn left ahead',
+    35: 'Ahead only', 36: 'Go straight or right', 37: 'Go straight or left', 38: 'Keep right',
+    39: 'Keep left', 40: 'Roundabout mandatory',
     41: 'End of no passing',
     42: 'End no passing vehicles > 3.5 tons'
 }
 
-# --- Image Processing Functions ---
+def adjust_gamma(image, gamma=1.0):
+    # Tăng cường độ sáng
+    invGamma = 1.0 / gamma
+    table = np.array([((i / 255.0) ** invGamma) * 255
+        for i in np.arange(0, 256)]).astype("uint8")
+    return cv.LUT(image, table)
+
 def returnHSV(img):
-    """Chuyển ảnh sang HSV và làm mờ nhẹ."""
-    blur = cv.GaussianBlur(img, (5, 5), 0)
+    # Tăng cường độ sáng trước khi chuyển đổi
+    img = adjust_gamma(img, gamma=1.2)
+    blur = cv.GaussianBlur(img, (5,5), 0)
     hsv = cv.cvtColor(blur, cv.COLOR_BGR2HSV)
     return hsv
 
-# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-# NGƯỠNG MÀU HSV CỐ ĐỊNH - CỰC KỲ QUAN TRỌNG - PHẢI TINH CHỈNH BẰNG TRACKBARS
-# Các giá trị dưới đây CHỈ LÀ VÍ DỤ và có thể KHÔNG TỐT cho ảnh của bạn.
-# Bạn BẮT BUỘC phải dùng công cụ trackbar để tìm giá trị phù hợp.
-# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-low_thresh_red1 = (160, 70, 70)     # Dải đỏ 1 (ví dụ)
-high_thresh_red1 = (180, 255, 255)
-low_thresh_red2 = (0, 70, 70)       # Dải đỏ 2 (ví dụ)
-high_thresh_red2 = (10, 255, 255)
-low_thresh_blue = (95, 80, 50)      # Dải xanh dương (ví dụ)
-high_thresh_blue = (130, 255, 255)
-low_thresh_yellow = (18, 80, 80)    # Dải vàng (ví dụ)
-high_thresh_yellow = (35, 255, 255)
-# Có thể cần thêm ngưỡng cho màu trắng/xám nếu biển báo có nền trắng rõ
-# low_thresh_white = (0, 0, 180)
-# high_thresh_white = (180, 30, 255)
+# Điều chỉnh ngưỡng màu cho GTSRB
+RED_LOW1, RED_HIGH1 = (0, 120, 70), (10, 255, 255)
+RED_LOW2, RED_HIGH2 = (170, 120, 70), (180, 255, 255)
+BLUE_LOW, BLUE_HIGH = (100, 150, 50), (140, 255, 200)
+YELLOW_LOW, YELLOW_HIGH = (20, 100, 100), (30, 255, 255)
 
-def create_binary_mask_hsv(hsv_img):
-    """Tạo mask nhị phân kết hợp cho các màu quan tâm từ ảnh HSV."""
-    mask_red1 = cv.inRange(hsv_img, low_thresh_red1, high_thresh_red1)
-    mask_red2 = cv.inRange(hsv_img, low_thresh_red2, high_thresh_red2)
-    mask_red = cv.bitwise_or(mask_red1, mask_red2)
+def binaryImg(img):
+    hsv = returnHSV(img)
+    mask_red1 = cv.inRange(hsv, RED_LOW1, RED_HIGH1)
+    mask_red2 = cv.inRange(hsv, RED_LOW2, RED_HIGH2)
+    b_img_red = cv.bitwise_or(mask_red1, mask_red2)
+    b_img_blue = cv.inRange(hsv, BLUE_LOW, BLUE_HIGH)
+    b_img_yellow = cv.inRange(hsv, YELLOW_LOW, YELLOW_HIGH)
+    
+    kernel = np.ones((3,3), np.uint8)
+    b_img_red = cv.morphologyEx(b_img_red, cv.MORPH_CLOSE, kernel, iterations=2)
+    b_img_red = cv.morphologyEx(b_img_red, cv.MORPH_OPEN, kernel, iterations=1)
+    b_img_blue = cv.morphologyEx(b_img_blue, cv.MORPH_CLOSE, kernel, iterations=2)
+    b_img_blue = cv.morphologyEx(b_img_blue, cv.MORPH_OPEN, kernel, iterations=1)
+    b_img_yellow = cv.morphologyEx(b_img_yellow, cv.MORPH_CLOSE, kernel, iterations=2)
+    b_img_yellow = cv.morphologyEx(b_img_yellow, cv.MORPH_OPEN, kernel, iterations=1)
+    
+    return b_img_red, b_img_blue, b_img_yellow
 
-    mask_blue = cv.inRange(hsv_img, low_thresh_blue, high_thresh_blue)
-    mask_yellow = cv.inRange(hsv_img, low_thresh_yellow, high_thresh_yellow)
-    # mask_white = cv.inRange(hsv_img, low_thresh_white, high_thresh_white) # Nếu dùng
-
-    # Kết hợp các mask màu cần thiết
-    combined_mask = cv.bitwise_or(mask_red, mask_blue)
-    combined_mask = cv.bitwise_or(combined_mask, mask_yellow)
-    # combined_mask = cv.bitwise_or(combined_mask, mask_white) # Nếu dùng
-
-    # Áp dụng morphology để dọn dẹp mask NGAY TẠI ĐÂY
-    kernel = np.ones(MORPH_KERNEL_SIZE, np.uint8)
-    # CLOSE trước để nối các vùng màu gần nhau, lấp lỗ nhỏ
-    combined_mask = cv.morphologyEx(combined_mask, cv.MORPH_CLOSE, kernel, iterations=1) # iterations=1 or 2
-    # OPEN sau để loại bỏ các chấm nhiễu nhỏ còn sót lại
-    combined_mask = cv.morphologyEx(combined_mask, cv.MORPH_OPEN, kernel, iterations=1)
-
-    return combined_mask
-
-# --- Loại bỏ hàm create_binary_mask_gray ---
-
-# --- Preprocessing for Model (Giữ nguyên) ---
-def preprocessing(img):
-    """Tiền xử lý ảnh đầu vào cho mô hình CNN."""
-    if img is None or img.shape[0] == 0 or img.shape[1] == 0:
-        logging.warning("Preprocessing received an invalid image.")
-        return None # Trả về None nếu ảnh không hợp lệ
+def preprocessing(img_roi):
     try:
-        gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+        img_resized = cv.resize(img_roi, (32, 32))
+        gray = cv.cvtColor(img_resized, cv.COLOR_BGR2GRAY)
         equalized = cv.equalizeHist(gray)
-        resized = cv.resize(equalized, RESIZE_DIM, interpolation=cv.INTER_AREA)
-        normalized = resized / 255.0
-        return normalized
+        blurred = cv.GaussianBlur(equalized, (3,3), 0)
+        img_processed = blurred / 255.0
+        return img_processed
     except cv.error as e:
-        logging.error(f"OpenCV error during preprocessing: {e}", exc_info=True)
-        return None
-    except Exception as e:
-        logging.error(f"General error during preprocessing: {e}", exc_info=True)
+        print(f"Preprocessing error: {e}")
         return None
 
-
-# --- Prediction Function (Thêm kiểm tra đầu vào) ---
-def predict(sign_image):
-    """Dự đoán nhãn và độ tin cậy cho ảnh biển báo."""
-    if sign_image is None or sign_image.size == 0:
-        logging.warning("Prediction received an invalid sign_image.")
-        return -1, 0.0 # Ảnh không hợp lệ
-
+def predict(sign_roi):
+    if sign_roi is None or sign_roi.size == 0: 
+        return -1, 0.0
+    
+    img_processed = preprocessing(sign_roi)
+    if img_processed is None: 
+        return -1, 0.0
+    
     try:
-        processed_img = preprocessing(sign_image)
-        if processed_img is None: # Kiểm tra kết quả từ preprocessing
-             return -1, 0.0
-
-        # Reshape cho Keras (batch_size=1, height, width, channels=1)
-        img_array = processed_img.reshape(1, RESIZE_DIM[0], RESIZE_DIM[1], 1)
-
-        # Thực hiện dự đoán
-        prediction = model.predict(img_array, verbose=0)
-        predicted_label = np.argmax(prediction)
-        confidence = np.max(prediction)
-        return predicted_label, confidence
+        img_reshaped = img_processed.reshape(1, 32, 32, 1)
+        prediction_probabilities = model.predict(img_reshaped, verbose=0)
+        predicted_class_index = np.argmax(prediction_probabilities)
+        confidence = prediction_probabilities[0][predicted_class_index]
+        
+        MIN_CONFIDENCE = 0.6
+        
+        if confidence < MIN_CONFIDENCE: 
+            return -1, confidence
+            
+        return predicted_class_index, confidence
     except Exception as e:
-        logging.error(f"Error during prediction: {e}", exc_info=True)
+        print(f"Prediction error: {e}")
         return -1, 0.0
 
-# --- Shape Identification Function (REVISED - Tăng cường kiểm tra) ---
-def identify_shape(contour):
-    """Xác định hình dạng (tam giác, chữ nhật, bát giác, tròn) và tính các thuộc tính."""
-    shape = "unknown"
+def get_shape_type(contour, epsilon_factor=0.04):
     perimeter = cv.arcLength(contour, True)
-    if perimeter < 10: return shape, 0.0, 0.0 # Bỏ qua chu vi quá nhỏ
-
+    if perimeter == 0: return None, 0, False, 0.0
     area = cv.contourArea(contour)
-    # Lọc diện tích nhỏ hơn nữa ở đây để tránh tính toán thừa
-    if area < MIN_SIGN_AREA / 2 : return shape, 0.0, 0.0
-
-    # Tính Solidity (độ đặc) - QUAN TRỌNG
-    hull = cv.convexHull(contour)
-    hull_area = cv.contourArea(hull)
-    # Tránh chia cho 0 và lọc solidity thấp ngay lập tức
-    if hull_area <= 0: return shape, 0.0, 0.0
-    solidity = float(area) / hull_area
-    if solidity < SOLIDITY_MIN_THRESHOLD: # <<< Lọc solidity sớm
-        return "low_solidity", solidity, 0.0 # Trả về lý do bị loại
-
-    # Tính Circularity (độ tròn) - QUAN TRỌNG
-    # Tránh chia cho 0 cho chu vi
-    if perimeter <= 0: return shape, solidity, 0.0
-    circularity = 4 * np.pi * (area / (perimeter ** 2))
-
-    # Xấp xỉ contour bằng đa giác
-    epsilon = APPROX_EPSILON_FACTOR * perimeter
-    approx = cv.approxPolyDP(contour, epsilon, True)
+    if area < 10: return None, 0, False, 0.0
+    
+    circularity = 4 * np.pi * (area / (perimeter ** 2)) if perimeter > 0 else 0.0
+    approx = cv.approxPolyDP(contour, epsilon_factor * perimeter, True)
     num_vertices = len(approx)
+    is_convex = cv.isContourConvex(approx)
+    
+    x, y, w, h = cv.boundingRect(contour)
+    aspect_ratio = w / float(h) if h > 0 else 0
+    
+    if num_vertices == 8 and circularity > 0.65:
+        return "octagon", num_vertices, is_convex, circularity
+    if num_vertices == 3 and circularity > 0.45:
+        return "triangle", num_vertices, is_convex, circularity
+    if num_vertices == 4 and 0.7 < aspect_ratio < 1.5 and circularity > 0.75:
+        return "rectangle", num_vertices, is_convex, circularity
+    if circularity > 0.8:
+        return "circle", num_vertices, is_convex, circularity
+    return None, num_vertices, is_convex, circularity
 
-    # Xác định hình dạng dựa trên số đỉnh và độ tròn
-    if num_vertices == 3:
-        shape = "triangle"
-    elif num_vertices == 4:
-        # Kiểm tra thêm tính lồi cho hình chữ nhật (loại bỏ hình lõm 4 đỉnh)
-        if cv.isContourConvex(approx):
-            shape = "rectangle"
-        # else: shape = "quad_non_convex" # Debug
-    elif num_vertices == 8:
-        # Yêu cầu độ tròn cao hơn cho bát giác/tròn 8 đỉnh
-        if circularity >= CIRCULARITY_THRESHOLD_FOR_CIRCLE - 0.1: # Ngưỡng chặt hơn chút
-             shape = "octagon"
-         # else: shape = "8_vertices_low_circ" # Debug
-    elif 5 <= num_vertices <= 7 : # Có thể là tròn bị méo hoặc hình khác
-         if circularity >= CIRCULARITY_THRESHOLD_FOR_CIRCLE:
-              shape = "circle"
-         # else: shape = f"{num_vertices}_vertices_low_circ" # Debug
-    elif num_vertices > 8: # Nhiều đỉnh thường là hình tròn
-        if circularity >= CIRCULARITY_THRESHOLD_FOR_CIRCLE:
-             shape = "circle"
-        # else: shape = f">{num_vertices}_vertices_low_circ" # Debug
-
-    # Trả về hình dạng, độ đặc, độ tròn
-    return shape, solidity, circularity
-
-# --- Sign Detection Function (REVISED - Chỉ dùng HSV) ---
 def findSigns(frame):
-    """Phát hiện và phân loại biển báo chỉ dùng ngưỡng HSV và lọc contour."""
-    output_frame = frame.copy()
-    detected_signs_info = {} # Dictionary để lưu phát hiện
+    if frame is None: return None
+    
+    # Resize để tăng tốc độ xử lý
+    orig_height, orig_width = frame.shape[:2]
+    scale_factor = 600 / max(orig_height, orig_width)
+    if scale_factor < 1:
+        frame = cv.resize(frame, (0,0), fx=scale_factor, fy=scale_factor)
+    
+    # Cân bằng sáng toàn ảnh
+    frame = cv.convertScaleAbs(frame, alpha=1.2, beta=20)
+    
+    frame_height, frame_width = frame.shape[:2]
+    b_img_red, b_img_blue, b_img_yellow = binaryImg(frame)
+    
+    contours_red, _ = cv.findContours(b_img_red, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+    contours_blue, _ = cv.findContours(b_img_blue, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+    contours_yellow, _ = cv.findContours(b_img_yellow, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 
-    # 1. Xử lý bằng HSV
-    hsv = returnHSV(frame)
-    binary_mask_hsv = create_binary_mask_hsv(hsv)
-    # cv.imshow("Combined HSV Mask", binary_mask_hsv) # DEBUG: Xem mask HSV
+    all_contours = []
+    for c in contours_red: all_contours.append({'contour': c, 'color': 'red'})
+    for c in contours_blue: all_contours.append({'contour': c, 'color': 'blue'})
+    for c in contours_yellow: all_contours.append({'contour': c, 'color': 'yellow'})
 
-    # 2. Tìm contours trên mask HSV đã được dọn dẹp
-    contours, _ = cv.findContours(binary_mask_hsv, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+    MIN_AREA = 300
+    MIN_WIDTH = 20
+    MIN_HEIGHT = 20
+    IOU_THRESHOLD = 0.3
 
-    # 3. Lặp qua và lọc các contour
-    for c in contours:
+    detected_signs_info = []
+    for item in all_contours:
+        c = item['contour']
         area = cv.contourArea(c)
-        # Lọc diện tích ban đầu (quan trọng)
-        if MIN_SIGN_AREA < area < MAX_SIGN_AREA:
-            # Xác định hình dạng và các thuộc tính (Đã tích hợp lọc solidity sớm)
-            shape, solidity, circularity = identify_shape(c)
+        x, y, w, h = cv.boundingRect(c)
 
-            # <<< BỘ LỌC 1: HÌNH DẠNG HỢP LỆ VÀ ĐỘ ĐẶC CAO >>>
-            # identify_shape đã lọc solidity, chỉ cần kiểm tra shape != unknown và không phải lý do loại bỏ
-            if shape not in ["unknown", "low_solidity"]:
-                x, y, w, h = cv.boundingRect(c)
-                if h == 0: continue # Tránh chia cho 0
-                aspect_ratio = float(w) / h
+        if area < MIN_AREA or w < MIN_WIDTH or h < MIN_HEIGHT:
+            continue
+            
+        aspect_ratio = w / float(h) if h > 0 else 0
+        if not (0.5 < aspect_ratio < 2.0): continue
+        
+        shape_name, _, _, _ = get_shape_type(c)
+        if shape_name not in ["circle", "triangle", "rectangle", "octagon"]:
+            continue
 
-                # <<< BỘ LỌC 2: TỶ LỆ KHUNG HÌNH (Aspect Ratio) THEO HÌNH DẠNG >>>
-                shape_aspect_ok = False
-                if shape == "triangle" and TRIANGLE_ASPECT_RATIO_MIN <= aspect_ratio <= TRIANGLE_ASPECT_RATIO_MAX:
-                    shape_aspect_ok = True
-                elif shape == "rectangle" and RECTANGLE_ASPECT_RATIO_MIN <= aspect_ratio <= RECTANGLE_ASPECT_RATIO_MAX:
-                    shape_aspect_ok = True
-                elif shape in ["circle", "octagon"]:
-                    # Kiểm tra thêm độ tròn chặt chẽ cho circle/octagon ở đây
-                    if CIRCULARITY_THRESHOLD_FOR_CIRCLE <= circularity and \
-                       CIRCLE_OCTAGON_ASPECT_RATIO_MIN <= aspect_ratio <= CIRCLE_OCTAGON_ASPECT_RATIO_MAX:
-                         shape_aspect_ok = True
+        padding = 15
+        y1, y2 = max(0, y - padding), min(frame_height, y + h + padding)
+        x1, x2 = max(0, x - padding), min(frame_width, x + w + padding)
+                      
+        sign_roi = frame[y1:y2, x1:x2]
+        if sign_roi.size == 0: continue
+        
+        label_id, confidence = predict(sign_roi)
+        if label_id == -1: continue
+            
+        label_text = f"{labelToText.get(label_id, f'Unknown ({label_id})')} ({confidence:.2f})"
+        detected_signs_info.append([x, y, x+w, y+h, label_text, area, confidence])
 
-                if shape_aspect_ok:
-                    # Nếu vượt qua tất cả bộ lọc hình học, tiến hành cắt và phân loại
-                    padding = 5 # Thêm lề nhỏ
-                    y1 = max(0, y - padding)
-                    y2 = min(frame.shape[0], y + h + padding)
-                    x1 = max(0, x - padding)
-                    x2 = min(frame.shape[1], x + w + padding)
+    # Sắp xếp theo confidence và area
+    detected_signs_info = sorted(detected_signs_info, key=lambda x: (x[6], x[5]), reverse=True)
+    
+    final_detections = []
+    for i in range(len(detected_signs_info)):
+        current_box_info = detected_signs_info[i]
+        is_suppressed = False
+        
+        for j in range(len(final_detections)):
+            existing_box_info = final_detections[j]
+            
+            xA = max(current_box_info[0], existing_box_info[0])
+            yA = max(current_box_info[1], existing_box_info[1])
+            xB = min(current_box_info[2], existing_box_info[2])
+            yB = min(current_box_info[3], existing_box_info[3])
+            
+            interArea = max(0, xB - xA) * max(0, yB - yA)
+            if interArea == 0: continue
+            
+            current_box_area = (current_box_info[2] - current_box_info[0]) * (current_box_info[3] - current_box_info[1])
+            existing_box_area = (existing_box_info[2] - existing_box_info[0]) * (existing_box_info[3] - existing_box_info[1])
+            
+            if current_box_area == 0 or existing_box_area == 0: continue
+            
+            iou = interArea / float(current_box_area + existing_box_area - interArea)
+            if iou > IOU_THRESHOLD:
+                is_suppressed = True
+                break
+                
+        if not is_suppressed:
+            final_detections.append(current_box_info)
 
-                    # Đảm bảo vùng cắt hợp lệ
-                    if y1 < y2 and x1 < x2:
-                        sign_roi = frame[y1:y2, x1:x2]
+    drawn_text_rects = []
+    for x1_draw, y1_draw, x2_draw, y2_draw, label_text, _, _ in final_detections:
+        cv.rectangle(frame, (x1_draw, y1_draw), (x2_draw, y2_draw), (0, 255, 0), 2)
+        
+        (text_width, text_height), baseline = cv.getTextSize(label_text, font_face, font_scale, font_thickness)
+        
+        # Tính toán vị trí text
+        text_x = x1_draw
+        text_y = y1_draw - 10 if y1_draw - 10 > 10 else y2_draw + text_height + 10
+        
+        # Đảm bảo text không vượt ra khỏi frame
+        if text_y < text_height + 10:
+            text_y = y2_draw + text_height + 10
+        if text_y > frame_height - 10:
+            text_y = y1_draw - 10
+            
+        # Vẽ nền text
+        cv.rectangle(frame, 
+                    (text_x, text_y - text_height - baseline - text_padding),
+                    (text_x + text_width + text_padding*2, text_y + baseline + text_padding),
+                    bg_color, -1)
+        
+        # Vẽ text
+        cv.putText(frame, label_text, 
+                  (text_x + text_padding, text_y - text_padding), 
+                  font_face, font_scale, text_color, font_thickness, cv.LINE_AA)
+    
+    # Resize lại kích thước ban đầu nếu cần
+    if scale_factor < 1:
+        frame = cv.resize(frame, (orig_width, orig_height))
+        
+    return frame
 
-                        if sign_roi.size > 0:
-                            # Phân loại bằng mô hình
-                            label_index, confidence = predict(sign_roi)
-
-                            # <<< BỘ LỌC 3: ĐỘ TIN CẬY CAO (Confidence) >>>
-                            if label_index != -1 and confidence >= CONFIDENCE_THRESHOLD:
-                                # Xử lý tránh vẽ trùng lặp (giữ nguyên logic cũ hoặc dùng NMS)
-                                center_x, center_y = x + w // 2, y + h // 2
-                                is_duplicate = False
-                                keys_to_delete = []
-                                for center_key, existing_info in detected_signs_info.items():
-                                    dist_sq = (center_x - center_key[0])**2 + (center_y - center_key[1])**2
-                                    old_w, old_h = existing_info['box'][2], existing_info['box'][3]
-                                    # Ngưỡng khoảng cách dựa trên kích thước trung bình / 3
-                                    threshold_dist_sq = (( (w + old_w) / 6)**2 + ( (h + old_h) / 6)**2)
-
-                                    if dist_sq < threshold_dist_sq:
-                                        if confidence > existing_info['confidence']:
-                                            keys_to_delete.append(center_key)
-                                        else:
-                                            is_duplicate = True
-                                        # Không break, kiểm tra tiếp các box khác
-                                # Xóa các box bị thay thế
-                                for key in keys_to_delete:
-                                    if key in detected_signs_info:
-                                        del detected_signs_info[key]
-
-                                if not is_duplicate:
-                                    # Lưu thông tin phát hiện hợp lệ
-                                    label_text = labelToText.get(label_index, f"U:{label_index}")
-                                    display_text = f"{label_text} ({confidence:.2f})"
-                                    detected_signs_info[(center_x, center_y)] = {
-                                        'box': (x, y, w, h),
-                                        'text': display_text,
-                                        'y_pos': y, # Dùng để sắp xếp vẽ
-                                        'confidence': confidence,
-                                        'shape': shape # Lưu lại hình dạng để debug nếu cần
-                                    }
-                    else:
-                         logging.warning(f"Invalid ROI calculated at box: {(x,y,w,h)}")
-
-
-    # 4. Vẽ kết quả lên ảnh (giữ nguyên logic vẽ)
-    detected_signs = sorted(list(detected_signs_info.values()), key=lambda item: item['y_pos'])
-    last_text_y = -100
-    text_gap = 20
-
-    for sign_info in detected_signs:
-        x, y, w, h = sign_info['box']
-        display_text = sign_info['text']
-        # Có thể thêm shape vào text để debug: display_text += f" S:{sign_info['shape']}"
-        cv.rectangle(output_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-        text_x = x
-        text_y = y - 10
-        if text_y < 15: text_y = y + h + 15
-        # Đơn giản hóa chống chồng lấp
-        if text_y < last_text_y + text_gap:
-             text_y = last_text_y + text_gap
-        (text_width, text_height), baseline = cv.getTextSize(display_text, cv.FONT_HERSHEY_SIMPLEX, 0.6, 1) # Giảm độ dày text
-        # Vẽ nền đen cho text
-        cv.rectangle(output_frame, (text_x, text_y - text_height - baseline), (text_x + text_width, text_y + baseline + 2), (0, 0, 0), -1)
-        # Vẽ text màu trắng
-        cv.putText(output_frame, display_text, (text_x, text_y), cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1) # Giảm độ dày text
-        last_text_y = text_y # Cập nhật vị trí y cuối cùng
-
-    # Debug: Đóng cửa sổ mask nếu mở
-    # try: cv.destroyWindow("Combined HSV Mask")
-    # except: pass
-
-    return output_frame
-
-
-# --- GUI Class (Sử dụng threading như đã triển khai ở phiên bản trước) ---
 class TrafficSignApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Traffic Sign Detection (HSV Only)")
-        self.root.geometry("900x800")
-        self.result_queue = Queue() # Queue cho kết quả từ thread
-        self.current_file_path = None # Lưu đường dẫn file đang xử lý
+    def __init__(self, root_window):
+        self.root = root_window
+        self.root.title("Traffic Sign Detection - GTSRB")
+        self.root.geometry("900x750")
+        
+        # Tạo theme đơn giản
+        self.root.configure(bg="#f0f0f0")
+        
+        self.info_label = Label(self.root, text="Chọn ảnh để nhận diện biển báo GTSRB", 
+                              font=("Arial", 14), bg="#f0f0f0", fg="#333")
+        self.info_label.pack(pady=15)
 
-        # Setup logging for GUI
-        self.log_handler = logging.StreamHandler() # Hoặc FileHandler
-        self.log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-        self.log_handler.setFormatter(self.log_formatter)
-        logging.getLogger().addHandler(self.log_handler) # Thêm handler vào root logger
-        logging.getLogger().setLevel(logging.INFO) # Đặt mức log
-
-        # --- Các thành phần GUI ---
-        self.label = Label(root, text="Upload an image for traffic sign detection", font=("Arial", 14))
-        self.label.pack(pady=15)
-
-        self.upload_button = Button(root, text="Choose Image", command=self.load_image, font=("Arial", 12), width=20, height=2)
+        self.upload_button = Button(self.root, text="Chọn Ảnh", command=self.load_image, 
+                                  font=("Arial", 12), width=20, bg="#4CAF50", fg="white")
         self.upload_button.pack(pady=10)
 
-        self.image_frame = tk.Frame(root, bg="lightgray", bd=1, relief="sunken")
-        self.image_frame.pack(pady=10, padx=10, expand=True, fill="both")
+        self.panel_frame = tk.Frame(self.root, bg="lightgray", bd=2, relief=tk.SUNKEN)
+        self.panel_frame.pack(pady=10, padx=10, fill=tk.BOTH, expand=True)
 
-        self.panel = Label(self.image_frame, bg="lightgray")
-        self.panel.pack(expand=True, fill="both", padx=5, pady=5)
+        self.image_panel = Label(self.panel_frame, bg="gray")
+        self.image_panel.pack(fill=tk.BOTH, expand=True)
+        
+        self.current_image_cv = None
+        
+        # Thêm label hiển thị trạng thái
+        self.status_label = Label(self.root, text="Sẵn sàng", font=("Arial", 10), 
+                                bg="#f0f0f0", fg="#555")
+        self.status_label.pack(pady=5)
 
-        self.status_label = Label(root, text="Please upload an image.", font=("Arial", 10), fg="gray")
-        self.status_label.pack(pady=5, side="bottom", fill="x")
-
-    # --- Hàm xử lý trong Thread ---
-    def process_image_thread(self, file_path):
-        try:
-            logging.info(f"Processing thread started for: {file_path}")
-            image = cv.imread(file_path)
-            if image is None:
-                logging.error(f"Could not read image file: {file_path}")
-                self.result_queue.put(("error", f"Could not read image: {file_path.split('/')[-1]}"))
-                return
-
-            # --- Gọi hàm xử lý chính ---
-            detected_image = findSigns(image) # Hàm này giờ chỉ dùng HSV
-
-            detected_image_rgb = cv.cvtColor(detected_image, cv.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(detected_image_rgb)
-            logging.info(f"Processing complete for: {file_path}")
-            self.result_queue.put(("success", pil_image, file_path))
-
-        except Exception as e:
-            logging.error(f"Error in processing thread for {file_path}: {e}", exc_info=True)
-            self.result_queue.put(("error", f"Processing error: {str(e)}"))
-
-    # --- Hàm Load Image (Khởi chạy Thread) ---
     def load_image(self):
         file_path = filedialog.askopenfilename(
-            title="Select an Image File",
-            filetypes=[("Image Files", "*.jpg *.jpeg *.png *.bmp *.tiff *.webp"), ("All Files", "*.*")]
+            title="Chọn file ảnh",
+            filetypes=[("Image files", "*.jpg *.jpeg *.png *.bmp *.tiff"), ("All files", "*.*")]
         )
         if not file_path:
-            self.status_label.config(text="Image selection cancelled.")
             return
+            
+        self.status_label.config(text="Đang xử lý...")
+        self.upload_button.config(state=tk.DISABLED)
+        
+        def process_image():
+            try:
+                self.current_image_cv = cv.imread(file_path)
+                if self.current_image_cv is None:
+                    self.root.after(0, self.show_error, f"Không thể đọc ảnh từ {file_path.split('/')[-1]}")
+                    return
 
-        self.current_file_path = file_path # Lưu lại path
-        short_filename = file_path.split('/')[-1]
-        self.status_label.config(text=f"Loading: {short_filename}...")
-        self.label.config(text="Processing...")
-        self.root.update_idletasks()
-        self.upload_button.config(state="disabled")
-        self.panel.config(image='') # Xóa ảnh cũ
+                image_to_process = self.current_image_cv.copy()
+                detected_image_cv = findSigns(image_to_process)
+                
+                if detected_image_cv is None:
+                    self.root.after(0, self.show_error, "Lỗi trong quá trình xử lý ảnh.")
+                    return
 
-        # Khởi chạy luồng xử lý
-        thread = threading.Thread(target=self.process_image_thread, args=(file_path,), daemon=True)
-        thread.start()
+                self.root.after(0, self.update_gui, detected_image_cv, file_path)
+                
+            except Exception as e:
+                self.root.after(0, self.show_error, str(e))
+            finally:
+                self.root.after(0, lambda: self.upload_button.config(state=tk.NORMAL))
+                self.root.after(0, lambda: self.status_label.config(text="Hoàn thành"))
 
-        # Lên lịch kiểm tra queue kết quả
-        self.root.after(100, self.check_result_queue)
+        Thread(target=process_image, daemon=True).start()
 
-    # --- Hàm kiểm tra Queue và cập nhật GUI ---
-    def check_result_queue(self):
-        try:
-            result = self.result_queue.get_nowait()
-            status, data = result[0], result[1:]
+    def update_gui(self, image_cv, file_path):
+        detected_image_pil = cv.cvtColor(image_cv, cv.COLOR_BGR2RGB)
+        img_pil = Image.fromarray(detected_image_pil)
 
-            # Chỉ cập nhật nếu kết quả là của file hiện tại
-            if status == "success" and data[1] == self.current_file_path:
-                pil_image, file_path = data
-                short_filename = file_path.split('/')[-1]
-                logging.info(f"Updating GUI for successful detection: {short_filename}")
+        panel_width = self.panel_frame.winfo_width()
+        panel_height = self.panel_frame.winfo_height()
 
-                # Resize ảnh để hiển thị
-                frame_w = self.image_frame.winfo_width() - 15
-                frame_h = self.image_frame.winfo_height() - 15
-                if frame_w <= 1 or frame_h <= 1:
-                    frame_w, frame_h = 750, 600 # Fallback
+        if panel_width <= 1: panel_width = 800
+        if panel_height <= 1: panel_height = 600
 
-                img_w, img_h = pil_image.size
-                scale = min(frame_w / img_w, frame_h / img_h, 1.0) # Không phóng to, chỉ thu nhỏ
-                new_w, new_h = int(img_w * scale), int(img_h * scale)
+        img_pil.thumbnail((panel_width - 20, panel_height - 20), Image.Resampling.LANCZOS)
+        img_tk = ImageTk.PhotoImage(img_pil)
 
-                display_image = pil_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        self.image_panel.config(image=img_tk)
+        self.image_panel.image = img_tk
+        self.info_label.config(text=f"Đã xử lý: {file_path.split('/')[-1]}")
 
-                imgtk = ImageTk.PhotoImage(display_image)
-                self.panel.config(image=imgtk)
-                self.panel.image = imgtk
-                self.label.config(text="Detection complete. Choose another image.")
-                self.status_label.config(text=f"Displayed: {short_filename}")
-                self.upload_button.config(state="normal")
+    def show_error(self, error_msg):
+        self.info_label.config(text=f"Lỗi: {error_msg}")
+        self.status_label.config(text="Lỗi xảy ra")
 
-            elif status == "error": # Hiển thị lỗi bất kể file nào
-                error_message = data[0]
-                logging.error(f"Received error message: {error_message}")
-                self.label.config(text="An error occurred during processing.")
-                self.status_label.config(text=f"Error: {error_message}")
-                self.upload_button.config(state="normal")
-
-            # Nếu status="success" nhưng không phải file hiện tại, bỏ qua
-
-        except Empty: # Queue rỗng, tiếp tục chờ
-            # Kiểm tra xem thread có còn chạy không (cách đơn giản)
-            if self.upload_button['state'] == 'disabled':
-                 self.root.after(100, self.check_result_queue)
-            # Nếu nút đã enabled mà queue rỗng thì thôi
-        except Exception as e: # Lỗi khi cập nhật GUI
-            logging.error(f"Error processing result from queue or updating GUI: {e}", exc_info=True)
-            self.label.config(text="Error displaying result.")
-            self.status_label.config(text=f"GUI Update Error: {str(e)}")
-            self.upload_button.config(state="normal") # Luôn bật lại nút nếu có lỗi
-
-
-# --- Main Execution Block ---
 if __name__ == "__main__":
-    # Cấu hình logging cơ bản ban đầu
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
     root = tk.Tk()
     app = TrafficSignApp(root)
     root.mainloop()

@@ -55,7 +55,7 @@ RESIZE_DIM = (32, 32)   # Kích thước ảnh đầu vào cho mô hình
 # --- Load Model and Labels ---
 try:
     # Đảm bảo file model nằm trong cùng thư mục hoặc cung cấp đường dẫn đầy đủ
-    model = load_model("model_24.h5")
+    model = load_model("Traffic_Sign\model_24.h5")
     print("Model loaded successfully.")
 except Exception as e:
     print(f"Error loading model: {e}")
@@ -78,7 +78,10 @@ labelToText = {
     35: 'Ahead only', 36: 'Go straight or right', 37: 'Go straight or left', 38: 'Keep right',
     39: 'Keep left', 40: 'Roundabout mandatory',
     41: 'End of no passing',
-    42: 'End no passing vehicles > 3.5 tons'
+    42: 'End no passing vehicles > 3.5 tons', 43:'Speed limit (5km/h)', 44: 'Speed limit (15km/h)', 
+    45: 'Speed limit (40km/h)', 46: 'Dont go straight or left', 47:'Dont go straight',
+    48:'Dont go Left', 49:'Dont go right', 50:'No Unturn', 51: 'No car', 52: 'No horn', 
+    53:'Watch out for cars', 54: 'Horn', 55:'Uturn', 56:'Zebra Crossing', 57:'Fences', 58:'No Stopping'
     # Thêm các lớp khác nếu cần...
 }
 
@@ -254,13 +257,13 @@ def findSigns(frame):
                     aspect_ratio = float(w) / h if h > 0 else 0
 
                     # <<< BỘ LỌC 3: TỶ LỆ KHUNG HÌNH (Aspect Ratio) THEO HÌNH DẠNG >>>
-                    shape_aspect_ok = False
-                    if shape == "triangle" and TRIANGLE_ASPECT_RATIO_MIN <= aspect_ratio <= TRIANGLE_ASPECT_RATIO_MAX:
-                        shape_aspect_ok = True
-                    elif shape == "rectangle" and RECTANGLE_ASPECT_RATIO_MIN <= aspect_ratio <= RECTANGLE_ASPECT_RATIO_MAX:
-                        shape_aspect_ok = True
-                    elif shape in ["circle", "octagon"] and CIRCLE_OCTAGON_ASPECT_RATIO_MIN <= aspect_ratio <= CIRCLE_OCTAGON_ASPECT_RATIO_MAX:
-                         shape_aspect_ok = True
+                    shape_aspect_ok = True
+                    # if shape == "triangle" and TRIANGLE_ASPECT_RATIO_MIN <= aspect_ratio <= TRIANGLE_ASPECT_RATIO_MAX:
+                    #     shape_aspect_ok = True
+                    # elif shape == "rectangle" and RECTANGLE_ASPECT_RATIO_MIN <= aspect_ratio <= RECTANGLE_ASPECT_RATIO_MAX:
+                    #     shape_aspect_ok = True
+                    # elif shape in ["circle", "octagon"] and CIRCLE_OCTAGON_ASPECT_RATIO_MIN <= aspect_ratio <= CIRCLE_OCTAGON_ASPECT_RATIO_MAX:
+                    #      shape_aspect_ok = True
 
                     if shape_aspect_ok:
                         # Nếu vượt qua tất cả bộ lọc hình học, tiến hành cắt và phân loại
